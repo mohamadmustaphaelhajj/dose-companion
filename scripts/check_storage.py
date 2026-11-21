@@ -13,6 +13,7 @@ class StorageChecks(unittest.TestCase):
     def setUp(self):
         self.db = sqlite3.connect(":memory:")
         self.db.executescript(SCHEMA.read_text())
+        self.db.executescript((SCHEMA.parent / "schema-v2.sql").read_text())
         self.db.execute(
             "INSERT INTO medications VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             ("med-1", "Example medication", "10 mg", "1 tablet", "12:00,20:00",
@@ -83,6 +84,23 @@ class StorageChecks(unittest.TestCase):
                 self.db.backup(target)
             with sqlite3.connect(path) as reopened:
                 self.assertEqual(reopened.execute("SELECT action FROM dose_events").fetchone()[0], "TAKEN")
+
+    def test_v2_upgrade_preserves_v1_history(self):
+        legacy = sqlite3.connect(":memory:")
+        try:
+            legacy.executescript(SCHEMA.read_text())
+            legacy.execute("INSERT INTO medications VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                           ("legacy", "Example", "1 mg", "1 tablet", "12:00", "HIGH", "UTC",
+                            "2026-11-19T00:00:00Z", 0))
+            legacy.execute("INSERT INTO dose_events (event_id, medication_id, scheduled_date, "
+                           "scheduled_time, schedule_zone, action, occurred_at, confirmation_method) "
+                           "VALUES ('old', 'legacy', '2026-11-19', '12:00', 'UTC', 'TAKEN', "
+                           "'2026-11-19T12:00:00Z', 'USER_CONFIRMED')")
+            legacy.executescript((SCHEMA.parent / "schema-v2.sql").read_text())
+            self.assertEqual(legacy.execute("SELECT action FROM dose_events").fetchone()[0], "TAKEN")
+            self.assertEqual(legacy.execute("SELECT count(*) FROM reminder_queue").fetchone()[0], 0)
+        finally:
+            legacy.close()
 
 
 class AndroidResourcesChecks(unittest.TestCase):

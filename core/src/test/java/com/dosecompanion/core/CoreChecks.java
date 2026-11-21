@@ -87,6 +87,7 @@ public final class CoreChecks {
                 slots.get(0).date, LocalTime.NOON).key().equals(slots.get(0).key()));
         expect("a dose cannot use a time outside its schedule", IllegalArgumentException.class,
                 () -> new DoseSlot(medication, LocalDate.of(2026, 11, 19), LocalTime.of(3, 0)));
+        checks += ReminderChecks.run();
         System.out.println("Passed " + checks + " core checks.");
     }
 

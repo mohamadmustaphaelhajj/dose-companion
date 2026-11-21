@@ -42,3 +42,9 @@ Offline support cannot make one disconnected device aware of an entry on another
 This workspace initially had Java but no Android SDK or Android Studio. After Android Studio and the SDK were installed, the debug APK built successfully using Gradle 8.13 and JDK 22. It was installed and launched on the user's ARM64 API 37 emulator on November 19, 2026, and the initial screen was visually checked. Full workflow and physical-device testing are still required before claiming the Android app works end to end.
 
 Each milestone should produce a reviewable change. Ask the owner before every commit. The connected GitHub tools support changes in existing repositories but currently expose no repository-creation operation; the owner may need to create the empty public repository first.
+
+## Reminder milestone
+
+Reminders use a separate SQLite queue (database version 2), a single local AlarmManager alarm, and explicit notification/alarm permissions. The migration preserves the version 1 journal. Notification actions open a specific scheduled dose, snooze ten minutes, or record uncertainty. Dismissal and uncertainty pause that occurrence without marking it taken. Repeat counts are bounded by priority and stop before the next dose or after two hours.
+
+Keep the validated reminders tree staged before starting camera edits. A tree/patch checkpoint in `.git` allows a later reminder-only commit while preserving uncommitted camera work. No commit is made by checkpointing, and the owner must approve the actual commit. See `docs/reminder-testing.md`.

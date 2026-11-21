@@ -1,15 +1,22 @@
 package com.dosecompanion.app;
 
+import android.Manifest;
 import android.app.Activity;
+import android.app.AlarmManager;
 import android.app.AlertDialog;
 import android.app.TimePickerDialog;
 import android.content.res.ColorStateList;
+import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.net.Uri;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.Build;
+import android.provider.Settings;
 import android.text.InputFilter;
 import android.text.InputType;
 import android.view.Gravity;
@@ -40,7 +47,7 @@ import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-/** First milestone: an entirely local, explicitly user-confirmed medication journal. */
+/** Local medication journal with opt-in device reminders. */
 public final class MainActivity extends Activity {
     private static final int BACKGROUND = 0xFFF5F6F0;
     private static final int INK = 0xFF19342D;
@@ -71,12 +78,38 @@ public final class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         page = savedInstanceState == null ? 0 : savedInstanceState.getInt("page", 0);
         store = new DoseStore(this);
+        ReminderEngine.createChannels(this);
         render();
+        openRequestedDose(getIntent());
     }
 
     @Override protected void onResume() {
         super.onResume();
+        ReminderEngine.WORKER.execute(() -> ReminderEngine.reconcile(getApplicationContext()));
         handler.post(refresh);
+    }
+
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        openRequestedDose(intent);
+    }
+
+    private void openRequestedDose(Intent intent) {
+        if (intent == null || !intent.hasExtra("medication_id")) return;
+        Intent request = new Intent(intent);
+        intent.removeExtra("medication_id");
+        storageWorker.execute(() -> {
+            DoseSlot slot = ReminderEngine.slotFromIntent(store, request);
+            if (slot == null) return;
+            DoseRules.Status status = store.status(slot);
+            runOnUiThread(() -> {
+                if (isDestroyed() || isFinishing()) return;
+                if (slot.medication.archived) toast("This schedule is archived.");
+                else if (status == DoseRules.Status.TAKEN) toast("This dose is already confirmed in your history.");
+                else confirmTaken(slot);
+            });
+        });
     }
 
     @Override protected void onPause() {
@@ -180,10 +213,7 @@ public final class MainActivity extends Activity {
                 DateTimeFormatter.ofPattern("EEEE, d MMMM", Locale.getDefault())));
         heading("Your day, clearly.", "A record you can come back to.");
 
-        LinearLayout preview = card(PALE_AMBER);
-        preview.addView(text("Development preview", 13, AMBER, true));
-        preview.addView(text("Reminders and camera guidance are not available yet.", 14, AMBER, false));
-        content.addView(preview);
+        renderReminderStatus();
 
         if (medications.stream().noneMatch(medication -> !medication.archived)) {
             empty("Start with your schedule", "Add a medication and the times you take it. "
@@ -280,7 +310,7 @@ public final class MainActivity extends Activity {
             content.addView(card);
         }
         content.addView(text("Times stay in the time zone shown, including when you travel. "
-                + "Priority is saved for future reminders; it does not change your dose.", 13, MUTED, false));
+                + "Priority controls reminder frequency; it does not change your dose.", 13, MUTED, false));
     }
 
     private void renderHistory() {
@@ -368,7 +398,8 @@ public final class MainActivity extends Activity {
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         priority.setAdapter(adapter);
         form.addView(priority);
-        form.addView(text("Priority is saved now. Reminders will be added in the next milestone.",
+        form.addView(text("Follow-ups: Routine every 30 minutes (2 alerts total); Important every 15 minutes "
+                        + "(3 total); Highest every 10 minutes (4 total). Device settings may delay alerts.",
                 13, MUTED, false));
         TextView error = text("", 14, 0xFF9A322B, false);
         error.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
@@ -392,6 +423,7 @@ public final class MainActivity extends Activity {
                         storageWorker.execute(() -> {
                             try {
                                 store.add(medication);
+                                ReminderEngine.reconcile(getApplicationContext());
                                 runOnUiThread(() -> {
                                     if (isDestroyed() || isFinishing()) return;
                                     dialog.dismiss();
@@ -451,6 +483,7 @@ public final class MainActivity extends Activity {
         storageWorker.execute(() -> {
             try {
                 operation.run();
+                ReminderEngine.reconcile(getApplicationContext());
                 runOnUiThread(() -> { if (!isDestroyed() && !isFinishing()) load(); });
             } catch (IllegalStateException error) {
                 showError(error.getMessage());
@@ -462,6 +495,69 @@ public final class MainActivity extends Activity {
 
     private void showError(String message) {
         runOnUiThread(() -> { if (!isDestroyed() && !isFinishing()) toast(message); });
+    }
+
+    private void renderReminderStatus() {
+        boolean enabled = ReminderEngine.enabled(this);
+        boolean allowed = ReminderEngine.notificationsAllowed(this);
+        boolean exact = ReminderEngine.exactAllowed(this);
+        boolean channels = ReminderEngine.channelsAllowed(this);
+        LinearLayout card = card(enabled && allowed && exact && channels ? PALE_GREEN : PALE_AMBER);
+        String status = !enabled ? "Reminders are off" : !allowed ? "Notifications are blocked"
+                : !channels ? "Some reminder categories are blocked"
+                : !exact ? "Reminders on · timing may be delayed" : "Reminders are on";
+        card.addView(text(status, 16, INK, true));
+        card.addView(text("Local reminders work without internet. Sound and timing depend on your device "
+                + "settings. Camera guidance is coming next.", 13, MUTED, false));
+        if (!enabled) {
+            Button enable = button("Enable reminders", true);
+            enable.setOnClickListener(view -> enableReminders());
+            card.addView(enable);
+        } else {
+            if (!allowed || !channels) {
+                Button permissions = button("Notification settings", true);
+                permissions.setOnClickListener(view -> startActivity(new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                        .putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName())));
+                card.addView(permissions);
+            }
+            if (!exact && Build.VERSION.SDK_INT >= 31) {
+                Button precision = button("Allow precise reminders", true);
+                precision.setOnClickListener(view -> startActivity(new Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
+                        Uri.parse("package:" + getPackageName()))));
+                card.addView(precision);
+            }
+            Button disable = button("Turn reminders off", false);
+            disable.setOnClickListener(view -> {
+                ReminderEngine.setEnabled(this, false);
+                ReminderEngine.WORKER.execute(() -> ReminderEngine.reconcile(getApplicationContext()));
+                render();
+            });
+            card.addView(disable);
+        }
+        content.addView(card);
+    }
+
+    private void enableReminders() {
+        if (Build.VERSION.SDK_INT >= 33
+                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 41);
+        } else {
+            ReminderEngine.setEnabled(this, true);
+            ReminderEngine.WORKER.execute(() -> ReminderEngine.reconcile(getApplicationContext()));
+            render();
+        }
+    }
+
+    @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == 41) {
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) enableReminders();
+            else {
+                ReminderEngine.setEnabled(this, true);
+                toast("Notifications are blocked. You can enable them in Notification settings.");
+                render();
+            }
+        }
     }
 
     private void toast(String message) { Toast.makeText(this, message, Toast.LENGTH_LONG).show(); }

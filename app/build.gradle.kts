@@ -7,11 +7,14 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.dosecompanion.app"
+        // Instrumentation checks must use the isolated package, preserving the real journal.
+        applicationId = if (providers.gradleProperty("reminderSmoke").orNull == "true")
+            "com.dosecompanion.app.remindertest" else "com.dosecompanion.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0-dev"
+        versionCode = 2
+        versionName = "0.2.0-dev"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     compileOptions {
@@ -22,4 +25,6 @@ android {
 
 dependencies {
     implementation(project(":core"))
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
 }

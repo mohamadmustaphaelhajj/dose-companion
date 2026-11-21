@@ -9,12 +9,14 @@ import android.database.sqlite.SQLiteOpenHelper;
 import com.dosecompanion.core.DoseRules;
 import com.dosecompanion.core.DoseSlot;
 import com.dosecompanion.core.Medication;
+import com.dosecompanion.core.ReminderPolicy;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.LocalTime;
+import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
@@ -26,7 +28,7 @@ final class DoseStore extends SQLiteOpenHelper {
     private final Context context;
 
     DoseStore(Context context) {
-        super(context, "dose-companion.db", null, 1);
+        super(context, "dose-companion.db", null, 2);
         this.context = context.getApplicationContext();
     }
 
@@ -35,7 +37,12 @@ final class DoseStore extends SQLiteOpenHelper {
     }
 
     @Override public void onCreate(SQLiteDatabase db) {
-        try (InputStream input = context.getAssets().open("schema.sql")) {
+        executeAsset(db, "schema.sql");
+        executeAsset(db, "schema-v2.sql");
+    }
+
+    private void executeAsset(SQLiteDatabase db, String asset) {
+        try (InputStream input = context.getAssets().open(asset)) {
             java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream();
             byte[] buffer = new byte[4096];
             int count;
@@ -53,8 +60,8 @@ final class DoseStore extends SQLiteOpenHelper {
     }
 
     @Override public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
-        // Future versions must provide migrations that preserve medication history.
-        throw new IllegalStateException("A database migration is required.");
+        if (oldVersion == 1 && newVersion == 2) executeAsset(db, "schema-v2.sql");
+        else throw new IllegalStateException("A database migration is required.");
     }
 
     List<Medication> medications() {
@@ -161,6 +168,71 @@ final class DoseStore extends SQLiteOpenHelper {
 
     private static String value(Cursor cursor, String name) {
         return cursor.getString(cursor.getColumnIndexOrThrow(name));
+    }
+
+    DoseSlot findSlot(String medicationId, String date, String time, String zone) {
+        for (Medication medication : medications()) {
+            if (medication.id.equals(medicationId) && medication.zone.getId().equals(zone)) {
+                return new DoseSlot(medication, LocalDate.parse(date), LocalTime.parse(time));
+            }
+        }
+        return null;
+    }
+
+    void ensureReminder(DoseSlot slot) {
+        ContentValues values = new ContentValues();
+        values.put("slot_key", slot.key());
+        values.put("medication_id", slot.medication.id);
+        values.put("scheduled_date", slot.date.toString());
+        values.put("scheduled_time", slot.time.toString());
+        values.put("schedule_zone", slot.medication.zone.getId());
+        values.put("next_at", slot.scheduledAt().toEpochMilli());
+        values.put("expires_at", ReminderPolicy.expiresAt(slot).toEpochMilli());
+        getWritableDatabase().insertWithOnConflict("reminder_queue", null, values,
+                SQLiteDatabase.CONFLICT_IGNORE);
+    }
+
+    List<ReminderEntry> reminders() {
+        List<ReminderEntry> entries = new ArrayList<>();
+        try (Cursor cursor = getReadableDatabase().query("reminder_queue", null, null,
+                null, null, null, "next_at ASC")) {
+            while (cursor.moveToNext()) {
+                DoseSlot slot = findSlot(value(cursor, "medication_id"), value(cursor, "scheduled_date"),
+                        value(cursor, "scheduled_time"), value(cursor, "schedule_zone"));
+                if (slot == null) continue;
+                int nextColumn = cursor.getColumnIndexOrThrow("next_at");
+                entries.add(new ReminderEntry(slot, cursor.isNull(nextColumn) ? null
+                        : Instant.ofEpochMilli(cursor.getLong(nextColumn)),
+                        Instant.ofEpochMilli(cursor.getLong(cursor.getColumnIndexOrThrow("expires_at"))),
+                        cursor.getInt(cursor.getColumnIndexOrThrow("deliveries"))));
+            }
+        }
+        return entries;
+    }
+
+    void updateReminder(DoseSlot slot, Instant next, int deliveries) {
+        ContentValues values = new ContentValues();
+        if (next == null) values.putNull("next_at");
+        else values.put("next_at", next.toEpochMilli());
+        values.put("deliveries", deliveries);
+        getWritableDatabase().update("reminder_queue", values, "slot_key = ?", new String[]{slot.key()});
+    }
+
+    void pruneReminders(Instant now) {
+        getWritableDatabase().delete("reminder_queue", "expires_at < ?",
+                new String[]{Long.toString(now.minusSeconds(172800).toEpochMilli())});
+    }
+
+    static final class ReminderEntry {
+        final DoseSlot slot;
+        final Instant next, expires;
+        final int deliveries;
+        ReminderEntry(DoseSlot slot, Instant next, Instant expires, int deliveries) {
+            this.slot = slot;
+            this.next = next;
+            this.expires = expires;
+            this.deliveries = deliveries;
+        }
     }
 
     static final class HistoryEntry {
