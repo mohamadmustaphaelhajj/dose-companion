@@ -278,6 +278,10 @@ public final class MainActivity extends Activity {
                 actions.addView(unsure, params);
             }
             card.addView(actions);
+            Button scan = button("Check bottle label", false);
+            scan.setOnClickListener(view -> startActivity(ReminderEngine.forSlot(
+                    new Intent(this, LabelCameraActivity.class), slot)));
+            card.addView(scan);
         }
         content.addView(card);
     }
@@ -369,8 +373,11 @@ public final class MainActivity extends Activity {
         LinearLayout form = column();
         form.setPadding(dp(24), dp(8), dp(24), dp(8));
         EditText name = field(form, "Medication name", "Name as printed on the label", 120);
-        EditText strength = field(form, "Strength", "For example, 10 mg", 80);
+        EditText strength = field(form, "Printed product strength", "For example, 900 mg (from the label)", 80);
         EditText quantity = field(form, "Quantity per dose", "For example, 1 tablet", 80);
+        form.addView(text("Enter your own dose quantity and schedule. The camera checks only the product "
+                + "name and printed strength; it does not infer a prescription from bottle directions or capsule count.",
+                13, MUTED, false));
         form.addView(text("Daily times (24-hour clock)", 14, INK, true));
         List<LocalTime> times = new ArrayList<>();
         LinearLayout timeRows = column();
@@ -508,7 +515,7 @@ public final class MainActivity extends Activity {
                 : !exact ? "Reminders on · timing may be delayed" : "Reminders are on";
         card.addView(text(status, 16, INK, true));
         card.addView(text("Local reminders work without internet. Sound and timing depend on your device "
-                + "settings. Camera guidance is coming next.", 13, MUTED, false));
+                + "settings. You can check a bottle label from a scheduled dose.", 13, MUTED, false));
         if (!enabled) {
             Button enable = button("Enable reminders", true);
             enable.setOnClickListener(view -> enableReminders());

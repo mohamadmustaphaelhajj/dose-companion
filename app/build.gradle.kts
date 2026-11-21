@@ -12,8 +12,8 @@ android {
             "com.dosecompanion.app.remindertest" else "com.dosecompanion.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.2.0-dev"
+        versionCode = 4
+        versionName = "0.3.1-dev"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -25,6 +25,11 @@ android {
 
 dependencies {
     implementation(project(":core"))
+    implementation("androidx.activity:activity:1.10.1")
+    implementation("androidx.camera:camera-camera2:1.4.2")
+    implementation("androidx.camera:camera-lifecycle:1.4.2")
+    implementation("androidx.camera:camera-view:1.4.2")
+    implementation("com.google.mlkit:text-recognition:16.0.1")
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
 }
