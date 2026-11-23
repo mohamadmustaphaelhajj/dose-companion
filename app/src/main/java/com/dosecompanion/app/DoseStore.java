@@ -28,7 +28,7 @@ final class DoseStore extends SQLiteOpenHelper {
     private final Context context;
 
     DoseStore(Context context) {
-        super(context, "dose-companion.db", null, 2);
+        super(context, "dose-companion.db", null, 3);
         this.context = context.getApplicationContext();
     }
 
@@ -39,6 +39,7 @@ final class DoseStore extends SQLiteOpenHelper {
     @Override public void onCreate(SQLiteDatabase db) {
         executeAsset(db, "schema.sql");
         executeAsset(db, "schema-v2.sql");
+        executeAsset(db, "schema-v3.sql");
     }
 
     private void executeAsset(SQLiteDatabase db, String asset) {
@@ -60,8 +61,27 @@ final class DoseStore extends SQLiteOpenHelper {
     }
 
     @Override public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
-        if (oldVersion == 1 && newVersion == 2) executeAsset(db, "schema-v2.sql");
-        else throw new IllegalStateException("A database migration is required.");
+        if (oldVersion < 1 || newVersion != 3) throw new IllegalStateException("A database migration is required.");
+        if (oldVersion < 2) executeAsset(db, "schema-v2.sql");
+        if (oldVersion < 3) executeAsset(db, "schema-v3.sql");
+    }
+
+    String directions(String medicationId) {
+        try (Cursor cursor = getReadableDatabase().query("medication_directions", new String[]{"confirmed_text"},
+                "medication_id = ?", new String[]{medicationId}, null, null, null)) {
+            return cursor.moveToFirst() ? cursor.getString(0) : "";
+        }
+    }
+    void saveDirections(String medicationId, String text) {
+        if (text == null || text.trim().isEmpty() || text.length() > 2000) throw new IllegalArgumentException("Review the directions before saving.");
+        ContentValues values = new ContentValues(); values.put("medication_id", medicationId);
+        values.put("confirmed_text", text.trim());
+        getWritableDatabase().insertWithOnConflict("medication_directions", null, values, SQLiteDatabase.CONFLICT_REPLACE);
+    }
+    void add(Medication medication, String directions) {
+        SQLiteDatabase db = getWritableDatabase(); db.beginTransaction();
+        try { add(medication); if (!directions.trim().isEmpty()) saveDirections(medication.id, directions);
+            db.setTransactionSuccessful(); } finally { db.endTransaction(); }
     }
 
     List<Medication> medications() {

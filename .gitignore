@@ -12,4 +12,5 @@ local.properties
 captures/
 *.apk
 *.aab
+*.litertlm
 .tools/

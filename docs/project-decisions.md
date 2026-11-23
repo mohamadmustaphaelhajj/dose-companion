@@ -16,6 +16,7 @@ Users are assumed to be acting honestly. Vision accuracy and uncertainty remain 
 ## Privacy
 
 - Never persist or upload camera video, photos, thumbnails or frame buffers. Analyze in memory on the device and release buffers when the session ends.
+- Local model weights and runtime compilation caches may be stored privately. They contain no user camera recordings. Model downloads happen explicitly through the browser; the application retains no network permission.
 - Store only the schedule and minimal journal metadata required for history and future synchronization. Do not keep raw OCR text from the rest of a prescription label, which may contain personal information.
 - Public GitHub content and demos use fictional medication labels, never a friend's records.
 - No analytics, advertising, face identification or biometric templates.
@@ -39,6 +40,8 @@ Offline support cannot make one disconnected device aware of an entry on another
 
 ## Delivery and review
 
+The current experimental OCR/local-VLM design, pinned model, phone benchmarks and reproduction steps are documented in [local vision](local-vision.md). Setup scans yield editable suggestions requiring user confirmation; daily matching compares independent readings with the confirmed profile. Routine OCR searches for confirmed profile details and compares observed strength exactly. The optional VLM receives neither expected values nor the OCR answer. This does not train the model on the user's bottle.
+
 This workspace initially had Java but no Android SDK or Android Studio. After Android Studio and the SDK were installed, the debug APK built successfully using Gradle 8.13 and JDK 22. It was installed and launched on the user's ARM64 API 37 emulator on November 19, 2026, and the initial screen was visually checked. Full workflow and physical-device testing are still required before claiming the Android app works end to end.
 
 Each milestone should produce a reviewable change. Ask the owner before every commit. The connected GitHub tools support changes in existing repositories but currently expose no repository-creation operation; the owner may need to create the empty public repository first.
@@ -48,3 +51,7 @@ Each milestone should produce a reviewable change. Ask the owner before every co
 Reminders use a separate SQLite queue (database version 2), a single local AlarmManager alarm, and explicit notification/alarm permissions. The migration preserves the version 1 journal. Notification actions open a specific scheduled dose, snooze ten minutes, or record uncertainty. Dismissal and uncertainty pause that occurrence without marking it taken. Repeat counts are bounded by priority and stop before the next dose or after two hours.
 
 Keep the validated reminders tree staged before starting camera edits. A tree/patch checkpoint in `.git` allows a later reminder-only commit while preserving uncommitted camera work. No commit is made by checkpointing, and the owner must approve the actual commit. See `docs/reminder-testing.md`.
+
+## Sequential prescription review
+
+The current scanner asks for name, strength and directions separately, with explicit review and confirmation before every transition. It uses OCR without loading the experimental VLM. Directions can be collected in sections and corrected by the user; quantities and reminder times are never inferred. Database v3 adds only a table of user-confirmed directions, preserving the v1/v2 medication, reminder and journal records. Confirmed fields survive rotation while unconfirmed OCR and image buffers are discarded.
