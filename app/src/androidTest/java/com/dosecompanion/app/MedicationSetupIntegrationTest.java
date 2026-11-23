@@ -20,12 +20,18 @@ import static org.junit.Assert.*;
 @RunWith(AndroidJUnit4.class)
 public class MedicationSetupIntegrationTest {
     @Test public void returnedScanSuggestionPreservesDoseAndRequiresExplicitSave() throws Exception {
+        returnedSuggestion(false);
+    }
+    @Test public void returnedLocalDraftPreservesDoseAndRequiresExplicitSave() throws Exception {
+        returnedSuggestion(true);
+    }
+    private void returnedSuggestion(boolean local) throws Exception {
         var instrumentation = InstrumentationRegistry.getInstrumentation();
         Context context = instrumentation.getTargetContext();
-        assertTrue(context.getPackageName().endsWith(".remindertest"));
+        assertTrue(context.getPackageName().endsWith(".remindertest") || context.getPackageName().endsWith(".localexperiment"));
         int before;
         try (DoseStore store = new DoseStore(context)) { before = store.medications().size(); }
-        var monitor = instrumentation.addMonitor(LabelCameraActivity.class.getName(), null, false);
+        var monitor = instrumentation.addMonitor(local ? ExtractionLabActivity.class.getName() : LabelCameraActivity.class.getName(), null, false);
         try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
             scenario.onActivity(activity -> {
                 try {
@@ -35,7 +41,7 @@ public class MedicationSetupIntegrationTest {
                     assertNotNull(quantity); quantity.setText("1 tablet");
                     ((EditText) field("scanName").get(activity)).setText("Synthetic product");
                     ((EditText) field("scanStrength").get(activity)).setText("2.5 mg");
-                    View scan = find(dialog.getWindow().getDecorView(), "Scan name, strength and directions", false);
+                    View scan = find(dialog.getWindow().getDecorView(), local ? "Try local extraction (experiment)" : "Scan name, strength and directions", false);
                     assertNotNull(scan); scan.performClick();
                 } catch (ReflectiveOperationException failure) { throw new AssertionError(failure); }
             });
@@ -44,7 +50,7 @@ public class MedicationSetupIntegrationTest {
             instrumentation.runOnMainSync(() -> {
                 scanner.setResult(Activity.RESULT_OK, new Intent().putExtra("product_name", "Synthetic product")
                         .putExtra("strength", "2.5 mg").putExtra("confirmed_directions", "Take 1 tablet daily")
-                        .putExtra("sequence_confirmed", true)); scanner.finish();
+                        .putExtra(local ? "local_draft_reviewed" : "sequence_confirmed", true)); scanner.finish();
             });
             instrumentation.waitForIdleSync();
             scenario.onActivity(activity -> {
@@ -53,7 +59,7 @@ public class MedicationSetupIntegrationTest {
                     assertTrue(dialog.isShowing());
                     assertEquals("Synthetic product", ((EditText) field("scanName").get(activity)).getText().toString());
                     assertEquals("2.5 mg", ((EditText) field("scanStrength").get(activity)).getText().toString());
-                    assertTrue(((TextView) field("scanReview").get(activity)).getText().toString().contains("each scanned field"));
+                    assertTrue(((TextView) field("scanReview").get(activity)).getText().toString().contains(local ? "local model drafts" : "each scanned field"));
                     assertEquals("Take 1 tablet daily", ((EditText) field("scanDirections").get(activity)).getText().toString());
                     assertEquals("1 tablet", ((EditText) find(dialog.getWindow().getDecorView(), "For example, 1 tablet", true)).getText().toString());
                     assertEquals("Confirm details and save", dialog.getButton(AlertDialog.BUTTON_POSITIVE).getText().toString());

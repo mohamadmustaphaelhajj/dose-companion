@@ -5,15 +5,27 @@ plugins {
 android {
     namespace = "com.dosecompanion.app"
     compileSdk = 35
+    ndkVersion = "27.3.13750724"
+    val extractedNdk = rootProject.file(".tools/extract/android-ndk-r27d")
+    if (extractedNdk.exists()) ndkPath = extractedNdk.absolutePath
 
     defaultConfig {
         // Instrumentation checks must use the isolated package, preserving the real journal.
         applicationId = if (providers.gradleProperty("reminderSmoke").orNull == "true")
-            "com.dosecompanion.app.remindertest" else "com.dosecompanion.app"
+            "com.dosecompanion.app.remindertest" else if (providers.gradleProperty("localExperiment").orNull == "true")
+            "com.dosecompanion.app.localexperiment" else "com.dosecompanion.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 7
-        versionName = "0.5.0-dev"
+        versionCode = 8
+        versionName = "0.6.0-local-experiment"
+        manifestPlaceholders["applicationLabel"] = if (applicationId.orEmpty().endsWith("localexperiment")) "Dose Companion Lab"
+            else if (applicationId.orEmpty().endsWith("remindertest")) "Dose Companion Tests" else "@string/app_name"
+        ndk { abiFilters += listOf("arm64-v8a") }
+        externalNativeBuild { cmake {
+            arguments += listOf("-DCMAKE_BUILD_TYPE=Release")
+            val source = rootProject.file(".tools/extract/llama.cpp-f4f6f2e7db76e98c95cc9b7fc608ea669c806044")
+            if (source.exists()) arguments += "-DFETCHCONTENT_SOURCE_DIR_LLAMA=${source.absolutePath}"
+        } }
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -21,6 +33,7 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+    externalNativeBuild { cmake { path = file("src/main/cpp/CMakeLists.txt"); version = "3.22.1" } }
 }
 
 dependencies {

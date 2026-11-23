@@ -93,6 +93,7 @@ public final class CoreChecks {
         checks += FieldStabilityChecks.run();
         checks += TargetReaderChecks.run();
         checks += ScanSequenceChecks.run();
+        checks += LabelDraftChecks.run();
         System.out.println("Passed " + checks + " core checks.");
     }
 

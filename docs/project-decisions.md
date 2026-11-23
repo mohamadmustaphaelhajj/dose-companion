@@ -55,3 +55,7 @@ Keep the validated reminders tree staged before starting camera edits. A tree/pa
 ## Sequential prescription review
 
 The current scanner asks for name, strength and directions separately, with explicit review and confirmation before every transition. It uses OCR without loading the experimental VLM. Directions can be collected in sections and corrected by the user; quantities and reminder times are never inferred. Database v3 adds only a table of user-confirmed directions, preserving the v1/v2 medication, reminder and journal records. Confirmed fields survive rotation while unconfirmed OCR and image buffers are discarded.
+
+## Local extraction feature branch
+
+The owner authorized implementing and committing a local-model experiment on `feature/local-label-extraction`. The branch retains the existing scanner and adds a separate two/three-photo, per-image LFM2.5-VL-1.6B-Extract flow. Model drafts and independent OCR are shown with source photos; differing strengths or directions require explicit human review. Expected prescription values are withheld from the model. Photos and unconfirmed readings are discarded on background/rotation. No cloud inference, automatic dose logging or automatic prescription scheduling is introduced. Build with `-PlocalExperiment=true` for an isolated app and journal. Reproduction and measured results are in [the experiment guide](local-extraction-experiment.md).

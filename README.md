@@ -2,7 +2,7 @@
 
 A medication journal for Android, with a planned Windows web companion. Designed to help people check what they confirmed taking and when.
 
-**Status: development preview, milestone 5.** The local journal, opt-in reminders, a three-step, user-confirmed OCR scanner for name, strength and directions are implemented. Taking-gesture detection, accounts and synchronization are not implemented. The VLM still needs field testing, especially on supplement labels; see [workflow, model setup and measured limitations](docs/local-vision.md).
+**Status: development preview, local extraction experiment branch.** The local journal, opt-in reminders and three-step OCR scanner are implemented. This branch adds a separate, user-reviewed LFM2.5-VL-1.6B-Extract experiment using two or three in-memory bottle photos. See [setup, privacy, tests and measured limitations](docs/local-extraction-experiment.md). Taking-gesture detection, accounts and synchronization are not implemented.
 
 ## Implemented in this milestone
 
@@ -24,7 +24,7 @@ The journal contains user confirmations, not medical verification of ingestion. 
 
 ## Development
 
-The native Android interface uses Java and Android framework views. Domain rules live in a separate Java module so scheduling and confirmation behavior can be tested without an Android device. The camera uses CameraX, bundled ML Kit Latin OCR, and an optional imported LiteRT-LM vision model. The app manifest removes network permissions, frames are processed in memory, and camera screenshots/task previews are blocked. AndroidX Test is used for instrumentation tests.
+The native Android interface uses Java and Android framework views. Domain rules live in a separate Java module. The camera uses CameraX and bundled ML Kit Latin OCR. This branch's optional local extractor uses a pinned llama.cpp JNI runtime and imported GGUF weights; the previous LiteRT experiment is retained for comparison. The app manifest removes network permissions, frames are processed in memory, and camera screenshots/task previews are blocked. AndroidX Test is used for instrumentation tests.
 
 ### Run core and storage checks
 
@@ -40,7 +40,7 @@ Verified on November 19, 2026: 34 core checks, 11 SQLite/resource checks and 7 e
 
 ### Build Android
 
-Requires Android Studio with JDK 17 or 21, Android SDK platform 35, and its supported build tools. The project uses Android Gradle Plugin 8.13.0 and Gradle 8.13. Minimum supported device: Android 8 (API 26).
+Requires Android Studio with JDK 17 or 21, Android SDK platform 35, NDK 27.3.13750724 and CMake 3.22.1. The project uses Android Gradle Plugin 8.13.0 and Gradle 8.13. This experiment targets ARM64 Android 8 (API 26) or newer and requires substantial available RAM for inference.
 
 Open this directory in Android Studio and select the `app` run configuration. The official Gradle wrapper is included, with its distribution checksum pinned. From a terminal with the Android SDK configured:
 
@@ -51,6 +51,8 @@ Open this directory in Android Studio and select the `app` run configuration. Th
 On Windows, use `gradlew.bat` instead of `./gradlew`. The first build downloads Gradle and build dependencies; the installed app's local journal does not need internet. A debug APK will appear at `app/build/outputs/apk/debug/app-debug.apk` after a successful build.
 
 Do not check `local.properties`, signing keys, personal labels, medication records, credentials, or captured media into GitHub.
+
+For this feature branch, build with `-PlocalExperiment=true` to install **Dose Companion Lab** alongside the regular app and preserve its journal. See the [experiment guide](docs/local-extraction-experiment.md) before importing the two model files.
 
 ## Schedule behavior
 

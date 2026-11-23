@@ -384,7 +384,9 @@ public final class MainActivity extends Activity {
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
         if (request == 82 && result == RESULT_OK && data != null) {
-            String review = data.getBooleanExtra("sequence_confirmed", false)
+            String review = data.getBooleanExtra("local_draft_reviewed", false)
+                    ? "You reviewed the local model drafts against the source photos. Set quantity and times yourself before saving. No dose has been logged."
+                    : data.getBooleanExtra("sequence_confirmed", false)
                     ? "You reviewed each scanned field. Check the directions, then set quantity and times yourself. No dose has been logged."
                     : data.getBooleanExtra("guided_match", false)
                     ? "OCR matched the details you entered. Review every field before saving."
@@ -409,6 +411,9 @@ public final class MainActivity extends Activity {
         form.setPadding(dp(24), dp(8), dp(24), dp(8));
         Button scan = button("Scan name, strength and directions", false);
         form.addView(scan);
+        Button experiment = button("Try local extraction (experiment)", false);
+        experiment.setOnClickListener(view -> startActivityForResult(new Intent(this, ExtractionLabActivity.class), 82));
+        form.addView(experiment);
         scanReview = text(review, 14, AMBER, true);
         scanReview.setVisibility(review.isEmpty() ? View.GONE : View.VISIBLE); form.addView(scanReview);
         EditText name = field(form, "Medication name", "Name as printed on the label", 120);

@@ -13,4 +13,7 @@ captures/
 *.apk
 *.aab
 *.litertlm
+*.gguf
+.cxx/
+**/.cxx/
 .tools/
