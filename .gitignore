@@ -17,3 +17,6 @@ captures/
 .cxx/
 **/.cxx/
 .tools/
+
+__pycache__/
+*.pyc

@@ -18,7 +18,7 @@ import static org.junit.Assert.*;
 
 @RunWith(AndroidJUnit4.class)
 public class ExtractionReviewTest {
-    @Test public void conflictsRequireReviewAndBackgroundDiscardsAllUnconfirmedPixelsAndDrafts() throws Exception {
+    @Test public void combinedReadingRequiresReviewAndBackgroundDiscardsAllUnconfirmedPixelsAndDrafts() throws Exception {
         var instrumentation = InstrumentationRegistry.getInstrumentation();
         Context context = instrumentation.getTargetContext();
         assertTrue(context.getPackageName().endsWith(".localexperiment"));
@@ -33,12 +33,18 @@ public class ExtractionReviewTest {
                 try {
                     assertEquals(Lifecycle.State.RESUMED, activity.getLifecycle().getCurrentState());
                     images(activity).addAll(List.of(first, second));
-                    drafts(activity).addAll(List.of(new LabelDraft("Loniten", "2.5 mg", "Take 1 tablet daily."), new LabelDraft("Loniten", "25 mg", "")));
+                    drafts(activity).add(new LabelDraft("Loniten", "2.5 mg", "Take 1 tablet daily."));
+                    Field joined = ExtractionLabActivity.class.getDeclaredField("assembled"); joined.setAccessible(true); joined.set(activity, first.copy(Bitmap.Config.ARGB_8888, false));
+                    Method assembly = ExtractionLabActivity.class.getDeclaredMethod("showAssembly"); assembly.setAccessible(true); assembly.invoke(activity);
+                    Button read = (Button) text(activity.getWindow().getDecorView(), "Read this combined image locally");
+                    assertNotNull(read); assertFalse("Model reading must wait for panorama inspection", read.isEnabled());
+                    CheckBox joinedReview = (CheckBox) text(activity.getWindow().getDecorView(), "The joined text is complete and the seams are readable.");
+                    joinedReview.setChecked(true); assertEquals(ExtractModels.installed(activity), read.isEnabled());
                     Method review = ExtractionLabActivity.class.getDeclaredMethod("showReview", List.class); review.setAccessible(true);
                     review.invoke(activity, List.of("Synthetic timing/OCR", "Synthetic timing/OCR"));
                     View root = activity.getWindow().getDecorView();
                     EditText strength = (EditText) described(root, "Printed strength (preserve decimals and units)"); assertNotNull(strength);
-                    assertEquals("Conflicting strengths must remain blank", "", strength.getText().toString());
+                    assertEquals("2.5 mg", strength.getText().toString());
                     Button use = (Button) text(root, "Use reviewed details"); assertFalse(use.isEnabled());
                     strength.setText("2.5 mg"); CheckBox confirmation = (CheckBox) text(root, "I checked the name, strength and complete directions against the source label.");
                     confirmation.setChecked(true); assertTrue(use.isEnabled());

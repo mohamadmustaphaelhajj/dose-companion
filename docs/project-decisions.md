@@ -15,7 +15,7 @@ Users are assumed to be acting honestly. Vision accuracy and uncertainty remain 
 
 ## Privacy
 
-- Never persist or upload camera video, photos, thumbnails or frame buffers. Analyze in memory on the device and release buffers when the session ends.
+- Local-reader paths do not upload camera input. The owner later authorized selected still-photo uploads through OpenAI under standard retention for the personal cloud experiment; see the cloud-reader decision below. Camera inputs are not intentionally persisted by the app or backend.
 - Local model weights and runtime compilation caches may be stored privately. They contain no user camera recordings. Model downloads happen explicitly through the browser; the application retains no network permission.
 - Store only the schedule and minimal journal metadata required for history and future synchronization. Do not keep raw OCR text from the rest of a prescription label, which may contain personal information.
 - Public GitHub content and demos use fictional medication labels, never a friend's records.
@@ -59,3 +59,11 @@ The current scanner asks for name, strength and directions separately, with expl
 ## Local extraction feature branch
 
 The owner authorized implementing and committing a local-model experiment on `feature/local-label-extraction`. The branch retains the existing scanner and adds a separate two/three-photo, per-image LFM2.5-VL-1.6B-Extract flow. Model drafts and independent OCR are shown with source photos; differing strengths or directions require explicit human review. Expected prescription values are withheld from the model. Photos and unconfirmed readings are discarded on background/rotation. No cloud inference, automatic dose logging or automatic prescription scheduling is introduced. Build with `-PlocalExperiment=true` for an isolated app and journal. Reproduction and measured results are in [the experiment guide](local-extraction-experiment.md).
+
+## Single combined label image
+
+Following owner testing, the branch now assembles overlapping photos **before** extraction. OpenCV 4.12.0 ORB/RANSAC registers adjacent photos with bounded scale/rotation, rejects weak/missing overlaps, and selects one side of each overlap rather than blending duplicate text. The user reviews the actual joined pixels and seams before exactly one model call. OCR is an independent reading of that same joined image. Expected prescription values remain withheld. This is not full cylindrical unwarping; real bottle curvature can require retaking photos. Panorama and source images are cleared on background/rotation. Current validation and measured model errors are recorded in the experiment guide.
+
+## Cloud photo-reader personal experiment
+
+The owner rejected constrained bottle rotation and requested a few separate photos sent together to a cloud model. They selected OpenAI, requested help with API setup, and explicitly allowed standard API retention for their personal experiment after being told about up-to-30-day abuse-monitoring retention and approval requirements for Zero Data Retention. The Lab cloud build uses one multi-image Responses API request, `store:false`, a server-held API key, and separate upload and result confirmations. The Mac localhost/USB bridge has no image/request-body logging or persistence. This personal approval does not establish medical-data compliance or cover a public rollout. Ordinary offline builds retain no internet permission. Current setup and checks are in [the cloud guide](cloud-label-reader.md).

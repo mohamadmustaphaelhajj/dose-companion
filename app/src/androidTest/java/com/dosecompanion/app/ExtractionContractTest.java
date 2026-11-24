@@ -21,13 +21,13 @@ public class ExtractionContractTest {
         }
     }
     @Test public void modelInputIsBoundedWithoutRecyclingReviewSource() {
-        android.graphics.Bitmap source = android.graphics.Bitmap.createBitmap(1536, 1024, android.graphics.Bitmap.Config.ARGB_8888);
+        android.graphics.Bitmap source = android.graphics.Bitmap.createBitmap(2304, 1536, android.graphics.Bitmap.Config.ARGB_8888);
         byte[] jpeg = ExtractInput.jpeg(source);
         android.graphics.Bitmap decoded = android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.length);
         try {
-            assertTrue(decoded.getWidth() <= 640 && decoded.getHeight() <= 640);
+            assertTrue(decoded.getWidth() <= 1920 && decoded.getHeight() <= 1920 && (long) decoded.getWidth() * decoded.getHeight() <= 1800000);
             assertFalse("The source must remain available for human review", source.isRecycled());
-            assertEquals(1536, source.getWidth());
+            assertEquals(2304, source.getWidth());
         } finally { decoded.recycle(); source.recycle(); java.util.Arrays.fill(jpeg, (byte) 0); }
     }
     @Test public void acceptsOnlyCompleteStrictFlatJsonWithoutInventedFields() throws Exception {

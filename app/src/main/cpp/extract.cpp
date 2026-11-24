@@ -59,7 +59,7 @@ extern "C" JNIEXPORT jbyteArray JNICALL Java_com_dosecompanion_app_ExtractRuntim
         std::fill(data.begin(), data.end(), 0);
         std::unique_ptr<mtmd_bitmap, decltype(&mtmd_bitmap_free)> bitmap(decoded.bitmap, mtmd_bitmap_free);
         require(bitmap != nullptr && !decoded.video_ctx, "The image could not be decoded.");
-        require(mtmd_bitmap_get_nx(bitmap.get()) <= 640 && mtmd_bitmap_get_ny(bitmap.get()) <= 640,
+        require(mtmd_bitmap_get_nx(bitmap.get()) <= 1920 && mtmd_bitmap_get_ny(bitmap.get()) <= 1920,
                 "The image exceeds the CPU extraction size limit.");
         std::string system = utf(env, system_prompt);
         std::string user = std::string(mtmd_default_marker()) + "\nExtract the visible label fields. Do not guess missing text.";

@@ -10,6 +10,7 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <application
         android:allowBackup="false"
+        android:networkSecurityConfig="@xml/network_security_config"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="false"
         android:icon="@drawable/ic_dose"
@@ -30,6 +31,8 @@
         </activity>
         <activity android:name=".LabelCameraActivity" android:exported="false" />
         <activity android:name=".LocalModelActivity" android:exported="false" />
+        <activity android:name=".CloudLabelActivity" android:exported="false" />
+        <activity android:name=".CloudConnectionActivity" android:exported="false" />
         <activity android:name=".ExtractionLabActivity" android:exported="false" />
         <activity android:name=".ExtractModelActivity" android:exported="false" />
         <receiver android:name=".ReminderReceiver" android:exported="false" />

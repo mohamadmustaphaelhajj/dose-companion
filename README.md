@@ -2,7 +2,7 @@
 
 A medication journal for Android, with a planned Windows web companion. Designed to help people check what they confirmed taking and when.
 
-**Status: development preview, local extraction experiment branch.** The local journal, opt-in reminders and three-step OCR scanner are implemented. This branch adds a separate, user-reviewed LFM2.5-VL-1.6B-Extract experiment using two or three in-memory bottle photos. See [setup, privacy, tests and measured limitations](docs/local-extraction-experiment.md). Taking-gesture detection, accounts and synchronization are not implemented.
+**Status: development preview, cloud photo-reader experiment.** The active Lab build captures two to four separate photos and asks OpenAI to read them together. See [cloud setup, retention policy and testing](docs/cloud-label-reader.md). Local-model and panorama experiments remain in this branch as historical comparisons. The medication journal and reminders remain local; ingestion detection and account/history sync are not implemented.
 
 ## Implemented in this milestone
 
@@ -11,7 +11,7 @@ A medication journal for Android, with a planned Windows web companion. Designed
 - Explicitly confirm a dose as taken, or record uncertainty without marking it taken.
 - Review history with the scheduled date/time and the actual confirmation timestamp.
 - Archive a schedule without deleting its history.
-- Save the journal in an app-private SQLite database, with no network permission.
+- Save the journal in an app-private SQLite database. The cloud Lab variant has network permission; ordinary offline builds remove it.
 - Reject duplicate taken entries for the same scheduled dose, including at the database level.
 - Enable local reminders, snooze, priority-based follow-ups and recovery after restart/time changes.
 - See notification/alarm permission status and stop reminders by resolving, dismissing or archiving a dose.
@@ -52,7 +52,7 @@ On Windows, use `gradlew.bat` instead of `./gradlew`. The first build downloads 
 
 Do not check `local.properties`, signing keys, personal labels, medication records, credentials, or captured media into GitHub.
 
-For this feature branch, build with `-PlocalExperiment=true` to install **Dose Companion Lab** alongside the regular app and preserve its journal. See the [experiment guide](docs/local-extraction-experiment.md) before importing the two model files.
+For the current cloud experiment, build with `-PcloudExperiment=true` to install **Dose Companion Lab** alongside the regular app and preserve its journal. Follow the [cloud reader guide](docs/cloud-label-reader.md) for API setup and USB pairing. The cloud reader does not require imported local weights.
 
 ## Schedule behavior
 
