@@ -167,8 +167,27 @@ public class ReminderIntegrationTest {
         try (DoseStore store = new DoseStore(context)) {
             assertEquals(1, store.history().size());
             assertEquals(DoseRules.Status.TAKEN, store.history().get(0).status);
-            assertEquals(2, store.getReadableDatabase().getVersion());
+            assertEquals(3, store.getReadableDatabase().getVersion());
             assertTrue(store.reminders().isEmpty());
+        }
+    }
+
+    @Test public void v2UpgradePreservesHistoryAndStoresReviewedDirections() throws Exception {
+        DoseSlot slot = fixture(context, Medication.Priority.HIGH);
+        try (DoseStore store = new DoseStore(context)) {
+            store.record(slot, DoseRules.Status.UNSURE, false, Instant.now());
+            SQLiteDatabase db = store.getWritableDatabase();
+            db.execSQL("DROP TABLE medication_directions"); db.setVersion(2);
+        }
+        try (DoseStore store = new DoseStore(context)) {
+            assertEquals(3, store.getReadableDatabase().getVersion());
+            assertEquals(1, store.history().size()); assertEquals(DoseRules.Status.UNSURE, store.status(slot));
+            assertEquals("", store.directions(slot.medication.id));
+            store.saveDirections(slot.medication.id, "Take 1 tablet daily");
+        }
+        try (DoseStore store = new DoseStore(context)) {
+            assertEquals("Take 1 tablet daily", store.directions(slot.medication.id));
+            assertEquals(1, store.history().size());
         }
     }
 

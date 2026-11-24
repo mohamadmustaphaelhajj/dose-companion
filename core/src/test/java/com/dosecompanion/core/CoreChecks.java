@@ -89,6 +89,11 @@ public final class CoreChecks {
                 () -> new DoseSlot(medication, LocalDate.of(2026, 11, 19), LocalTime.of(3, 0)));
         checks += ReminderChecks.run();
         checks += LabelChecks.run();
+        checks += AgreementChecks.run();
+        checks += FieldStabilityChecks.run();
+        checks += TargetReaderChecks.run();
+        checks += ScanSequenceChecks.run();
+        checks += LabelDraftChecks.run();
         System.out.println("Passed " + checks + " core checks.");
     }
 

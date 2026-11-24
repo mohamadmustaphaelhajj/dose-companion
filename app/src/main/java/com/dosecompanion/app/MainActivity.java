@@ -73,6 +73,10 @@ public final class MainActivity extends Activity {
     private List<DoseSlot> slots = new ArrayList<>();
     private List<DoseStore.HistoryEntry> history = new ArrayList<>();
     private Map<String, DoseRules.Status> statuses = new HashMap<>();
+    private AlertDialog medicationDialog;
+    private EditText scanName, scanStrength, scanDirections;
+    private Map<String, String> directions = new HashMap<>();
+    private TextView scanReview;
 
     @Override public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -133,6 +137,8 @@ public final class MainActivity extends Activity {
         storageWorker.execute(() -> {
             try {
                 List<Medication> nextMedications = store.medications();
+                Map<String, String> nextDirections = new HashMap<>();
+                for (Medication medication : nextMedications) nextDirections.put(medication.id, store.directions(medication.id));
                 List<DoseSlot> nextSlots = DoseRules.today(nextMedications, Instant.now());
                 Map<String, DoseRules.Status> nextStatuses = new HashMap<>();
                 for (DoseSlot slot : nextSlots) nextStatuses.put(slot.key(), store.status(slot));
@@ -140,6 +146,7 @@ public final class MainActivity extends Activity {
                 runOnUiThread(() -> {
                     if (isDestroyed() || isFinishing()) return;
                     medications = nextMedications;
+                    directions = nextDirections;
                     slots = nextSlots;
                     statuses = nextStatuses;
                     history = nextHistory;
@@ -298,6 +305,7 @@ public final class MainActivity extends Activity {
             card.addView(text(medication.priority.label + " priority", 13, GREEN, true));
             card.addView(text(medication.name, 22, INK, true));
             card.addView(text(medication.strength + " · " + medication.quantity, 15, MUTED, false));
+            if (!directions.getOrDefault(medication.id, "").isEmpty()) card.addView(text("Reviewed label directions: " + directions.get(medication.id), 14, INK, false));
             List<String> times = new ArrayList<>();
             for (LocalTime time : medication.times) times.add(TIME.format(time));
             card.addView(text("Every day at " + String.join(" and ", times), 16, INK, true));
@@ -370,10 +378,54 @@ public final class MainActivity extends Activity {
     }
 
     private void addMedication() {
+        addMedication("", "", "");
+    }
+
+    @Override protected void onActivityResult(int request, int result, Intent data) {
+        super.onActivityResult(request, result, data);
+        if (request == 82 && result == RESULT_OK && data != null) {
+            String review = data.getBooleanExtra("cloud_draft_reviewed", false)
+                    ? "You reviewed the cloud reader’s suggestions. Set quantity and times yourself before saving. No dose has been logged."
+                    : data.getBooleanExtra("local_draft_reviewed", false)
+                    ? "You reviewed the local model drafts against the source photos. Set quantity and times yourself before saving. No dose has been logged."
+                    : data.getBooleanExtra("sequence_confirmed", false)
+                    ? "You reviewed each scanned field. Check the directions, then set quantity and times yourself. No dose has been logged."
+                    : data.getBooleanExtra("guided_match", false)
+                    ? "OCR matched the details you entered. Review every field before saving."
+                    : data.getBooleanExtra("readers_agree", false)
+                            ? "Both readers agreed. Check the bottle and confirm or correct every suggested field."
+                            : "The readers did not both confirm these fields. Check the bottle and correct this OCR suggestion manually.";
+            if (medicationDialog != null && medicationDialog.isShowing()) {
+                scanName.setText(data.getStringExtra("product_name"));
+                scanStrength.setText(data.getStringExtra("strength"));
+                scanDirections.setText(data.getStringExtra("confirmed_directions"));
+                scanReview.setText(review); scanReview.setVisibility(View.VISIBLE);
+            } else addMedication(data.getStringExtra("product_name"), data.getStringExtra("strength"), review,
+                    data.getStringExtra("confirmed_directions"));
+        }
+    }
+
+    private void addMedication(String suggestedName, String suggestedStrength, String review) {
+        addMedication(suggestedName, suggestedStrength, review, "");
+    }
+    private void addMedication(String suggestedName, String suggestedStrength, String review, String initialDirections) {
         LinearLayout form = column();
         form.setPadding(dp(24), dp(8), dp(24), dp(8));
+        Button scan = button("Scan name, strength and directions", false);
+        form.addView(scan);
+        Button experiment = button("Read label from photos (cloud)", false);
+        experiment.setOnClickListener(view -> startActivityForResult(new Intent(this, CloudLabelActivity.class), 82));
+        if (BuildConfig.CLOUD_READER_ENABLED) form.addView(experiment);
+        scanReview = text(review, 14, AMBER, true);
+        scanReview.setVisibility(review.isEmpty() ? View.GONE : View.VISIBLE); form.addView(scanReview);
         EditText name = field(form, "Medication name", "Name as printed on the label", 120);
         EditText strength = field(form, "Printed product strength", "For example, 900 mg (from the label)", 80);
+        name.setText(suggestedName); strength.setText(suggestedStrength);
+        scanName = name; scanStrength = strength;
+        EditText labelDirections = field(form, "Reviewed label directions (optional)", "Confirm the full printed wording", 2000);
+        labelDirections.setSingleLine(false); labelDirections.setMinLines(2); labelDirections.setText(initialDirections);
+        labelDirections.setLayoutParams(new LinearLayout.LayoutParams(-1, dp(110)));
+        scanDirections = labelDirections;
         EditText quantity = field(form, "Quantity per dose", "For example, 1 tablet", 80);
         form.addView(text("Enter your own dose quantity and schedule. The camera checks only the product "
                 + "name and printed strength; it does not infer a prescription from bottle directions or capsule count.",
@@ -414,7 +466,15 @@ public final class MainActivity extends Activity {
         ScrollView scroll = new ScrollView(this);
         scroll.addView(form);
         AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Add medication")
-                .setView(scroll).setNegativeButton("Cancel", null).setPositiveButton("Save", null).create();
+                .setView(scroll).setNegativeButton("Cancel", null).setPositiveButton("Confirm details and save", null).create();
+        medicationDialog = dialog;
+        dialog.setOnDismissListener(ignored -> {
+            if (medicationDialog == dialog) { medicationDialog = null; scanName = null; scanStrength = null; scanDirections = null; scanReview = null; }
+        });
+        scan.setOnClickListener(view -> {
+            startActivityForResult(new Intent(this, LabelCameraActivity.class).putExtra(LabelCameraActivity.ENROLL, true)
+                    .putExtra("expected_name", name.getText().toString()).putExtra("expected_strength", strength.getText().toString()), 82);
+        });
         dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE)
                 .setOnClickListener(view -> {
                     try {
@@ -425,11 +485,12 @@ public final class MainActivity extends Activity {
                                 ZoneId.systemDefault(), Instant.now(), false);
                         Button save = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
                         save.setEnabled(false);
+                        String reviewedDirections = labelDirections.getText().toString();
                         dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setEnabled(false);
                         dialog.setCancelable(false);
                         storageWorker.execute(() -> {
                             try {
-                                store.add(medication);
+                                store.add(medication, reviewedDirections);
                                 ReminderEngine.reconcile(getApplicationContext());
                                 runOnUiThread(() -> {
                                     if (isDestroyed() || isFinishing()) return;

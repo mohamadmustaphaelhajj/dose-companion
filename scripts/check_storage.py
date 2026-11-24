@@ -14,6 +14,7 @@ class StorageChecks(unittest.TestCase):
         self.db = sqlite3.connect(":memory:")
         self.db.executescript(SCHEMA.read_text())
         self.db.executescript((SCHEMA.parent / "schema-v2.sql").read_text())
+        self.db.executescript((SCHEMA.parent / "schema-v3.sql").read_text())
         self.db.execute(
             "INSERT INTO medications VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             ("med-1", "Example medication", "10 mg", "1 tablet", "12:00,20:00",
@@ -22,6 +23,16 @@ class StorageChecks(unittest.TestCase):
 
     def tearDown(self):
         self.db.close()
+
+    def test_v3_adds_reviewed_directions_without_replacing_journal(self):
+        self.event()
+        self.db.execute("DROP TABLE medication_directions")
+        self.db.executescript((SCHEMA.parent / "schema-v3.sql").read_text())
+        self.db.execute("INSERT INTO medication_directions VALUES (?, ?)", ("med-1", "Take 1 tablet daily"))
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM dose_events").fetchone()[0], 1)
+        self.assertEqual(self.db.execute("SELECT confirmed_text FROM medication_directions").fetchone()[0], "Take 1 tablet daily")
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.db.execute("INSERT INTO medication_directions VALUES (?, ?)", ("unknown", "Directions"))
 
     def event(self, event_id="event-1", action="TAKEN", date="2026-11-19", time="12:00",
               medication="med-1", method=None):

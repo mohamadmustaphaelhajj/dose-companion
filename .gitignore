@@ -12,4 +12,11 @@ local.properties
 captures/
 *.apk
 *.aab
+*.litertlm
+*.gguf
+.cxx/
+**/.cxx/
 .tools/
+
+__pycache__/
+*.pyc
