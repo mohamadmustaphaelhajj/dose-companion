@@ -1,3 +1,4 @@
+import io
 import base64
 import json
 import threading
@@ -39,6 +40,18 @@ class Contracts(unittest.TestCase):
         complete={'status':'completed','output':[{'type':'message','content':[{'type':'output_text','text':json.dumps(DRAFT)}]}]}
         self.assertEqual(DRAFT,bridge.read_openai_result(complete))
 
+    def test_provider_errors_are_classified_without_echoing_content(self):
+        for status, code, expected in [(429,'credit_balance_exhausted','provider_quota_exhausted'),(429,'rate_limit_exceeded','provider_rate_limited'),(401,None,'provider_auth_failed'),(403,None,'provider_access_denied'),(404,None,'provider_model_unavailable'),(500,None,'provider_unavailable')]:
+            failure=HTTPError('https://api.openai.com/v1/responses',status,'hidden',{},io.BytesIO(json.dumps({'error':{'code':code,'message':'sensitive content must not be echoed'}}).encode()))
+            with patch.object(bridge,'build_opener') as opener:
+                opener.return_value.open.side_effect=failure
+                with self.assertRaises(bridge.BridgeError) as caught:bridge.call_openai([JPEG,JPEG],SETTINGS)
+                self.assertEqual(expected,caught.exception.code)
+                opener.return_value.open.assert_called_once()
+    def test_all_unknown_fields_are_an_unreadable_label(self):
+        with self.assertRaises(bridge.BridgeError) as caught:bridge.validated_draft(dict(product_name=None,strength=None,directions=None))
+        self.assertEqual('model_could_not_read_label',caught.exception.code)
+
 
 class HTTPContracts(unittest.TestCase):
     def setUp(self):
@@ -49,9 +62,11 @@ class HTTPContracts(unittest.TestCase):
         self.base='http://127.0.0.1:'+str(self.server.server_port)
     def tearDown(self):
         self.server.shutdown();self.server.server_close();self.thread.join();self.provider.stop();self.configuration.stop()
-    def request(self,path,body=None,token=SETTINGS['BRIDGE_TOKEN']):
+    def request(self,path,body=None,token=SETTINGS['BRIDGE_TOKEN'],request_id=None):
         data=None if body is None else json.dumps(body).encode()
-        req=Request(self.base+path,data=data,headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'})
+        headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'}
+        if request_id:headers['X-Scan-Request-Id']=request_id
+        req=Request(self.base+path,data=data,headers=headers)
         try:
             with urlopen(req,timeout=2) as response:return response.status,json.load(response),response.headers
         except HTTPError as error:
@@ -73,5 +88,12 @@ class HTTPContracts(unittest.TestCase):
         status,data,_=self.request('/v1/config');self.assertFalse(data['ready'])
         status,_,_=self.request('/v1/extract',{'consent':True,'images':[JPEG,JPEG]})
         self.assertEqual(503,status);self.call.assert_not_called()
+
+    def test_repeated_submission_id_never_makes_another_provider_call(self):
+        payload={'consent':True,'images':[JPEG,JPEG]}
+        self.assertEqual(200,self.request('/v1/extract',payload,request_id='a'*32)[0])
+        self.server.last_request=0
+        status,body,_=self.request('/v1/extract',payload,request_id='a'*32)
+        self.assertEqual(409,status);self.assertEqual('duplicate_submission',body['error']);self.call.assert_called_once()
 
 if __name__=='__main__':unittest.main()

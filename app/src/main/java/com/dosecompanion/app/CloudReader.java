@@ -53,6 +53,7 @@ final class CloudReader implements AutoCloseable {
         active = connection;
         try {
             if (cancelled) throw new IOException("Cancelled.");
+            if (body != null) connection.setRequestProperty("X-Scan-Request-Id", UUID.randomUUID().toString().replace("-", ""));
             connection.setInstanceFollowRedirects(false); connection.setUseCaches(false);
             connection.setConnectTimeout(12000); connection.setReadTimeout(170000);
             connection.setRequestProperty("Authorization", "Bearer " + token); connection.setRequestProperty("Accept", "application/json");
@@ -65,10 +66,15 @@ final class CloudReader implements AutoCloseable {
             }
             int status = connection.getResponseCode();
             if (status != 200) {
-                if (status == 401) throw new IOException("Connection pairing failed. Check Cloud connection settings.");
-                if (status == 503) throw new IOException("OpenAI API setup is not complete on the server yet.");
-                if (status == 429) throw new IOException("The reader is busy. Wait briefly and try again.");
-                throw new IOException("Cloud reading failed. Check the server’s API project, billing and model access, then try again.");
+                String code = "";
+                try (InputStream error = connection.getErrorStream()) {
+                    if (error != null) {
+                        ByteArrayOutputStream bytes = new ByteArrayOutputStream(); byte[] buffer = new byte[1024]; int n;
+                        while ((n = error.read(buffer)) != -1) { if (bytes.size()+n > 16384) break; bytes.write(buffer,0,n); }
+                        code = JsonParser.parseString(bytes.toString("UTF-8")).getAsJsonObject().get("error").getAsString();
+                    }
+                } catch (IOException | RuntimeException ignored) { }
+                throw new IOException(errorMessage(status, code));
             }
             ByteArrayOutputStream output = new ByteArrayOutputStream();
             try (InputStream input = connection.getInputStream()) {
@@ -76,7 +82,37 @@ final class CloudReader implements AutoCloseable {
                 while ((n = input.read(buffer)) != -1) { if (output.size()+n > 16384) throw new IOException("Server reply exceeded the expected limit."); output.write(buffer,0,n); }
             }
             if (cancelled) throw new IOException("Cancelled."); return output.toString(StandardCharsets.UTF_8.name());
+        } catch (SocketTimeoutException timeout) {
+            throw new IOException(body == null ? "Connection check timed out. Check the Mac backend and USB connection."
+                : "Reading timed out. Your photos are kept. The provider may have processed this request; no retry was sent. Check the connection before explicitly trying again.");
+        } catch (javax.net.ssl.SSLException tls) {
+            throw new IOException("Secure connection failed. Check the backend HTTPS certificate; do not switch a public server to HTTP.");
+        } catch (ConnectException | UnknownHostException unavailable) {
+            throw new IOException("Cannot reach the backend. Keep the Mac awake and server running; reconnect USB and run server/pair_android.py, then Check cloud connection.");
+        } catch (SocketException interrupted) {
+            throw new IOException(body == null ? "Connection check was interrupted. Reconnect USB and check that the Mac backend is running."
+                : "The connection was interrupted. Your photos are kept. The request may have reached the provider; no automatic retry was sent. Reconnect USB and check the backend before explicitly trying again.");
         } finally { connection.disconnect(); if (active == connection) active = null; }
+    }
+    static String errorMessage(int status, String code) {
+        switch (code) {
+            case "provider_quota_exhausted": return "OpenAI API credits are exhausted. Add credits to the API organization, allow the balance to update, then explicitly retry. Your photos are kept.";
+            case "provider_auth_failed": return "The server’s OpenAI API key was rejected. Update it on the Mac with server/configure.py. Your photos are kept.";
+            case "provider_access_denied": case "provider_model_unavailable": return "The API project cannot access the configured model. Check model access and OPENAI_MODEL on the server. Your photos are kept.";
+            case "provider_rate_limited": return "OpenAI is temporarily rate limiting requests. Wait before explicitly retrying. No automatic retry was sent.";
+            case "incomplete_model_result": return "The cloud reading stopped before completing. No fields were accepted. Your photos are kept; you can explicitly retry or enter details manually.";
+            case "model_could_not_read_label": return "The model could not read the label. Inspect and replace blurry or missing views, then send again or enter details manually.";
+            case "invalid_model_result": return "The model returned an unusable result. No fields were accepted. Your photos are kept; retry explicitly or enter details manually.";
+            case "duplicate_submission": return "This submission was already received. It was not sent to OpenAI again. A new explicit attempt may incur another charge.";
+            case "provider_timeout_or_connection_failed": return "The backend could not finish contacting OpenAI. Your photos are kept. The request may have been processed; no automatic retry was sent.";
+            case "provider_unavailable": return "OpenAI is temporarily unavailable. Your photos are kept. Wait before explicitly trying again.";
+            case "provider_request_rejected": return "OpenAI rejected the server request. Check the backend model configuration before retrying. Your photos are kept.";
+            case "photo_too_large": case "request_too_large": return "The selected photos are too large. Replace them with closer views of the relevant label sections.";
+        }
+        if (status == 401) return "Phone pairing was rejected. Check Cloud connection settings or run server/pair_android.py on the Mac.";
+        if (status == 503) return "The backend API setup is incomplete. Run server/configure.py on the Mac before uploading.";
+        if (status == 429) return "The reader is busy. Wait briefly; no automatic retry was sent.";
+        return "The backend could not complete this reading. Your photos are kept; check the connection before trying again.";
     }
     void cancel() { cancelled = true; HttpURLConnection connection = active; if (connection != null) connection.disconnect(); }
     @Override public void close() { cancel(); }

@@ -19,8 +19,8 @@ public class CloudReviewSmokeTest {
         int before;try(DoseStore store=new DoseStore(context)){before=store.medications().size();}
         try(ActivityScenario<CloudLabelActivity> scenario=ActivityScenario.launch(CloudLabelActivity.class)){
             scenario.onActivity(activity -> {try{
-                ((ArrayList<Bitmap>)field("photos").get(activity)).addAll(List.of(a,b));field("ready").setBoolean(activity,true);
-                Method update=CloudLabelActivity.class.getDeclaredMethod("updateCapture");update.setAccessible(true);update.invoke(activity);
+                CloudScanSession session=(CloudScanSession)field("session").get(activity);
+                session.photos.addAll(List.of(a,b));session.ready=true;session.checking=false;session.reviewPhotos();
                 Button send=(Button)field("send").get(activity);assertFalse(send.isEnabled());
                 ((CheckBox)field("consent").get(activity)).setChecked(true);assertTrue(send.isEnabled());
                 // Do not click Send: this smoke test performs no cloud upload.

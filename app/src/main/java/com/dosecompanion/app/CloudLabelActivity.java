@@ -5,56 +5,86 @@ import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
+import android.graphics.Color;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
-import android.os.SystemClock;
 import android.text.*;
 import android.util.Size;
 import android.view.*;
 import android.widget.*;
 import androidx.activity.ComponentActivity;
+import androidx.lifecycle.ViewModelProvider;
 import androidx.camera.core.*;
 import androidx.camera.core.resolutionselector.*;
 import androidx.camera.lifecycle.ProcessCameraProvider;
 import androidx.camera.view.PreviewView;
 import androidx.core.content.ContextCompat;
 import com.dosecompanion.core.LabelDraft;
-import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.*;
 
 /** A few separate photos, one explicit upload, one reviewed prescription draft. No image files. */
 public final class CloudLabelActivity extends ComponentActivity {
-    private final ExecutorService worker = Executors.newSingleThreadExecutor();
-    private final ArrayList<Bitmap> photos = new ArrayList<>();
-    private final Object photosLock = new Object();
+    private CloudScanSession session;
+    private ArrayList<Bitmap> photos;
+    private EditText reviewName, reviewStrength, reviewDirections;
     private PreviewView preview;
     private ProcessCameraProvider provider;
     private androidx.camera.core.Camera camera;
     private ImageCapture capture;
     private LinearLayout root, thumbnails;
-    private TextView status, notice;
+    private TextView status, notice, captureTitle, captureHint;
+    private ProgressBar progress;
     private Button take, remove, send;
+    private Button allowCamera, extra;
+    private final ArrayList<View> photoActions = new ArrayList<>();
     private CheckBox consent;
     private AlertDialog enlarged;
-    private volatile CloudReader reader;
     private volatile boolean resumed;
     private volatile int generation;
-    private boolean busy, capturing, reviewing, binding, ready;
+    private boolean busy, capturing, reviewing, photoReview, binding, ready;
+    private static final int INK = 0xFF183C39, MUTED = 0xFF526B67, ACCENT = 0xFF176C5A, PAPER = 0xFFF4F7F4;
     private String retention = "Checking the configured provider’s retention policy…";
     private int captureWidth, captureHeight;
+    private int shownCaptureIndex = -1;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state); getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE | WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        showCapture("Take a front view with name/strength, then the full printed directions. Extra views can complete curved or hidden text.");
+        session = new ViewModelProvider(this).get(CloudScanSession.class); photos = session.photos;
+        session.changes.observe(this, value -> { if (resumed) renderSession(); });
+        showCapture();
     }
     private void screen(String title) {
         ScrollView scroll = new ScrollView(this); root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(16),dp(12),dp(16),dp(16)); root.setFitsSystemWindows(true); root.setBackgroundColor(0xFFF5F6F0);
-        scroll.addView(root); setContentView(scroll); text(root,title,24);
+        root.setPadding(dp(20),dp(16),dp(20),dp(24)); root.setFitsSystemWindows(true); root.setBackgroundColor(PAPER);
+        scroll.setFillViewport(true); scroll.addView(root); setContentView(scroll);
+        TextView eyebrow = text(root,"ADD MEDICATION",12); eyebrow.setTextColor(ACCENT); eyebrow.setLetterSpacing(.12f);
+        TextView heading = text(root,title,28); heading.setTypeface(null,Typeface.BOLD); androidx.core.view.ViewCompat.setAccessibilityHeading(heading,true);
     }
-    private void showCapture(String message) {
-        reviewing = false; screen("Read prescription from photos");
-        text(root,"Take 2–4 clear photos of the same bottle. Each can show a different section; all photos are read together. No panorama or matching alignment is needed. Keep wanted text inside the white frame and unrelated personal details outside it when possible.",15);
+    private void steps(int active) {
+        LinearLayout row=new LinearLayout(this); row.setPadding(0,dp(12),0,dp(16)); root.addView(row);
+        String[] labels={"Label","Instructions","Photos","Details"};
+        for(int i=0;i<labels.length;i++) {
+            TextView label=new TextView(this); label.setText((i+1)+"\n"+labels[i]);label.setTextSize(12);label.setGravity(Gravity.CENTER);
+            label.setPadding(dp(2),dp(10),dp(2),dp(10));label.setTextColor(i==active?Color.WHITE:INK);
+            label.setBackground(rounded(i==active?ACCENT:0xFFE2ECE6,12));
+            label.setContentDescription("Step "+(i+1)+" of 4: "+labels[i]+(i==active?", current step":i<active?", completed":""));
+            LinearLayout.LayoutParams size=new LinearLayout.LayoutParams(0,-2,1);if(i>0)size.leftMargin=dp(5);row.addView(label,size);
+        }
+    }
+    private int captureIndex() { return session.retakeIndex>=0?session.retakeIndex:photos.size(); }
+    private String photoTitle(int index) {return index==0?"Name & strength":index==1?"Taking instructions":"Extra view "+(index-1);}
+    private void updateCapturePrompt() {
+        int index=captureIndex(); captureTitle.setText(photoTitle(index));
+        captureHint.setText(index==0?"Point at the medicine name and printed strength, including units such as mg. If they wrap around the bottle, add another view later."
+            :index==1?"Turn the bottle to the taking instructions: how much to take and how often. Photograph the whole sentence; add extra views later if it wraps around."
+            :"Capture any text missing from the first two photos, such as strength on the side or the rest of a wrapped instruction. Use the same bottle.");
+    }
+    private void showCapture() {
+        shownCaptureIndex=captureIndex();
+        reviewing = false; photoReview = false; screen("Scan your prescription"); steps(Math.min(captureIndex(),2));
+        captureTitle=text(root,"",21);captureTitle.setTypeface(null,Typeface.BOLD);captureHint=text(root,"",15);updateCapturePrompt();
         preview = new PreviewView(this); preview.setImplementationMode(PreviewView.ImplementationMode.COMPATIBLE);
         preview.setScaleType(PreviewView.ScaleType.FILL_CENTER); preview.setContentDescription("Live label camera; tap to focus");
         preview.setOnClickListener(v -> {}); preview.setOnTouchListener((v,event) -> {
@@ -69,35 +99,76 @@ public final class CloudLabelActivity extends ComponentActivity {
         guidePaint.setStyle(android.graphics.Paint.Style.STROKE);guidePaint.setStrokeWidth(dp(2));guidePaint.setColor(android.graphics.Color.WHITE);
         View guide = new View(this){@Override protected void onDraw(android.graphics.Canvas canvas){canvas.drawRect(getWidth()*.08f,getHeight()*.14f,getWidth()*.92f,getHeight()*.86f,guidePaint);}};
         guide.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);cameraBox.addView(guide,new FrameLayout.LayoutParams(-1,-1));
-        root.addView(cameraBox,new LinearLayout.LayoutParams(-1,dp(280)));
-        status = text(root,message,15); status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+        LinearLayout.LayoutParams cameraSize=new LinearLayout.LayoutParams(-1,dp(280));cameraSize.topMargin=dp(12);root.addView(cameraBox,cameraSize);
+        text(root,"Tap the label to focus. Keep text inside the frame and avoid glare.",13);
+        status = text(root,"",15); status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
         thumbnails = new LinearLayout(this); root.addView(thumbnails);
-        button(root,"Allow camera",() -> requestPermissions(new String[]{Manifest.permission.CAMERA},94));
-        take = button(root,"Capture photo",this::takePhoto);
-        remove = button(root,"Remove last photo",() -> {
-            if (photos.isEmpty()) return; thumbnails.removeAllViews(); photos.remove(photos.size()-1).recycle(); consent.setChecked(false); updateCapture();
+        allowCamera=button(root,"Allow camera",() -> requestPermissions(new String[]{Manifest.permission.CAMERA},94));
+        take = primary(root,"Capture photo",this::takePhoto);
+        remove = button(root,photos.size()>=2?"Back to photo review":"Retake name & strength",() -> {
+            if(capturing||busy)return;stopCamera();
+            if(photos.size()>=2)session.reviewPhotos();else session.captureMore(0);
         });
-        notice = text(root,retention,13);
-        consent = new CheckBox(this); consent.setText("I agree to send these selected prescription photos through my backend to OpenAI under the retention policy shown above.");
-        consent.setSaveEnabled(false); root.addView(consent); consent.setOnCheckedChangeListener((v,checked) -> updateCapture());
-        send = button(root,"Send selected photos to OpenAI",this::upload);
-        button(root,"Check cloud connection",this::checkConnection);
-        button(root,"Cloud connection settings (discards photos)",() -> startActivity(new Intent(this,CloudConnectionActivity.class)));
-        button(root,"Return without saving",this::finish);
-        text(root,"Photos are held in memory and cleared when you leave this screen. Upload happens only after you agree and press Send. Once sent, a request can finish at the provider even if you close this screen. Scanning never logs a dose as taken.",12);
+        // Upload consent is shown only after the user has captured both label sections.
+        consent=null;send=null;
+        button(root,"Cancel scan",this::finish);
+        text(root,"Photos stay on this device until you review and send them. Leaving this screen clears them.",12);
         updateCapture();
     }
+    private void showPhotoReview() {
+        reviewing=false;photoReview=true;stopCamera();screen("Check your photos");steps(2);
+        text(root,"Can you read the name, strength and complete taking instructions? Retake a blurry view or add a missing section. All photos will be read together.",15);
+        photoActions.clear();thumbnails=new LinearLayout(this);thumbnails.setOrientation(LinearLayout.VERTICAL);root.addView(thumbnails);
+        for(int i=0;i<photos.size();i++) {
+            final int index=i; LinearLayout card=new LinearLayout(this);card.setOrientation(LinearLayout.VERTICAL);card.setPadding(dp(12),dp(10),dp(12),dp(12));card.setBackground(rounded(Color.WHITE,16));
+            LinearLayout.LayoutParams cardSize=new LinearLayout.LayoutParams(-1,-2);cardSize.topMargin=dp(10);thumbnails.addView(card,cardSize);
+            TextView title=text(card,photoTitle(i),18);title.setTypeface(null,Typeface.BOLD);
+            ImageView image=new ImageView(this);image.setImageBitmap(photos.get(i));image.setScaleType(ImageView.ScaleType.FIT_CENTER);image.setContentDescription(photoTitle(i)+" photo; tap to inspect");image.setOnClickListener(v -> inspect(index));
+            card.addView(image,new LinearLayout.LayoutParams(-1,dp(150)));
+            LinearLayout actions=new LinearLayout(this);card.addView(actions);
+            rowButton(actions,"Inspect",() -> inspect(index)).setContentDescription("Inspect "+photoTitle(i)+" photo");
+            Button retake=rowButton(actions,"Retake",() -> beginCapture(index));retake.setContentDescription("Retake "+photoTitle(i)+" photo");photoActions.add(retake);
+            if(i>=2){Button delete=rowButton(actions,"Remove",() -> {if(busy)return;detachImages();session.removeExtra(index);showPhotoReview();updatePhotoReview();});delete.setContentDescription("Remove "+photoTitle(i)+" photo");photoActions.add(delete);}
+        }
+        extra=button(root,"Add another view (optional)",() -> beginCapture(-1));
+        progress=new ProgressBar(this);progress.setContentDescription("Reading selected photos");root.addView(progress,new LinearLayout.LayoutParams(dp(32),dp(32)));
+        status=text(root,session.message,15);status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+        notice=text(root,retention,13);
+        consent = new CheckBox(this); consent.setText("I agree to send these selected prescription photos through my backend to OpenAI under the retention policy shown above.");
+        consent.setTextColor(INK);consent.setSaveEnabled(false); root.addView(consent); consent.setOnCheckedChangeListener((v,checked) -> updatePhotoReview());
+        send = primary(root,"Send selected photos to OpenAI",this::upload);
+        button(root,"Check cloud connection",this::checkConnection);
+        button(root,"Cloud connection settings (discards photos)",() -> startActivity(new Intent(this,CloudConnectionActivity.class)));
+        button(root,"Cancel scan",this::finish);
+        text(root,"Sending does not save a medication or log a dose. You will review the reading next. Leaving clears local photos; it cannot retract an upload already sent.",12);
+        updatePhotoReview();
+    }
+    private void beginCapture(int index) {
+        if(busy||capturing)return;
+        if(enlarged!=null){enlarged.dismiss();enlarged=null;}
+        if(consent!=null)consent.setChecked(false);
+        session.captureMore(index);
+    }
+    private void updatePhotoReview() {
+        if(!photoReview||consent==null)return;
+        notice.setText(retention);progress.setVisibility(busy?View.VISIBLE:View.GONE);
+        send.setText(busy?"Reading photos…":"Send selected photos to OpenAI");
+        send.setEnabled(ready&&!busy&&photos.size()>=2&&consent.isChecked());consent.setEnabled(ready&&!busy);
+        extra.setEnabled(!busy&&photos.size()<4);extra.setVisibility(photos.size()<4?View.VISIBLE:View.GONE);
+        for(View action:photoActions)action.setEnabled(!busy);
+    }
     private void updateCapture() {
-        if (reviewing || take == null || consent == null) return;
-        take.setText(photos.size() == 4 ? "4 photos selected" : "Capture photo " + (photos.size()+1));
-        take.setEnabled(!busy && !capturing && photos.size()<4 && capture != null);
-        remove.setEnabled(!busy && !capturing && !photos.isEmpty());
-        if (send != null) send.setEnabled(ready && !busy && !capturing && photos.size()>=2 && consent.isChecked());
-        consent.setEnabled(!busy && ready); notice.setText(retention); thumbnails.removeAllViews();
+        if (reviewing || photoReview || take == null) return;
+        updateCapturePrompt();
+        take.setText(capturing?"Capturing…":session.retakeIndex>=0?"Replace photo":captureIndex()==0?"Capture name & strength":captureIndex()==1?"Capture instructions":"Capture extra view");
+        take.setEnabled(!busy && !capturing && (photos.size()<4||session.retakeIndex>=0) && capture != null);
+        remove.setVisibility(photos.isEmpty()?View.GONE:View.VISIBLE);remove.setEnabled(!busy&&!capturing);
+        allowCamera.setVisibility(checkSelfPermission(Manifest.permission.CAMERA)==PackageManager.PERMISSION_GRANTED?View.GONE:View.VISIBLE);
+        thumbnails.removeAllViews();
         for(int i=0;i<photos.size();i++) {
             final int index=i; ImageView image=new ImageView(this); image.setImageBitmap(photos.get(i)); image.setScaleType(ImageView.ScaleType.FIT_CENTER);
-            image.setContentDescription("Selected photo "+(i+1)+"; tap to inspect"); image.setOnClickListener(v -> inspect(index));
-            thumbnails.addView(image,new LinearLayout.LayoutParams(0,dp(100),1));
+            image.setContentDescription(photoTitle(i)+" photo; tap to inspect"); image.setOnClickListener(v -> inspect(index));
+            thumbnails.addView(image,new LinearLayout.LayoutParams(0,dp(70),1));
         }
     }
     private void inspect(int index) {
@@ -109,11 +180,11 @@ public final class CloudLabelActivity extends ComponentActivity {
         enlarged.getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
     }
     private void startCamera() {
-        if(!resumed||reviewing||busy||binding||provider!=null||checkSelfPermission(Manifest.permission.CAMERA)!=PackageManager.PERMISSION_GRANTED)return;
+        if(!resumed||reviewing||photoReview||busy||binding||provider!=null||checkSelfPermission(Manifest.permission.CAMERA)!=PackageManager.PERMISSION_GRANTED)return;
         if(preview.getWidth()==0){preview.post(this::startCamera);return;}
         binding=true; final int session=generation; var future=ProcessCameraProvider.getInstance(this);
         future.addListener(() -> {
-            binding=false; if(!current(session)||reviewing||busy){if(resumed&&!reviewing&&!busy)startCamera();return;}
+            binding=false; if(!current(session)||reviewing||photoReview||busy){if(resumed&&!reviewing&&!photoReview&&!busy)startCamera();return;}
             try {
                 ProcessCameraProvider available=future.get(); Preview feed=new Preview.Builder().build(); feed.setSurfaceProvider(preview.getSurfaceProvider());
                 ImageCapture photo=new ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
@@ -126,7 +197,7 @@ public final class CloudLabelActivity extends ComponentActivity {
     }
     private void stopCamera(){if(provider!=null)provider.unbindAll();provider=null;camera=null;capture=null;}
     private void takePhoto(){
-        if(capture==null||capturing||busy||photos.size()>=4)return;
+        if(capture==null||capturing||busy||photoReview||(photos.size()>=4&&session.retakeIndex<0))return;
         capturing=true; final int session=generation; captureWidth=preview.getWidth();captureHeight=preview.getHeight();updateCapture();status.setText("Hold still…");
         capture.takePicture(ContextCompat.getMainExecutor(this),new ImageCapture.OnImageCapturedCallback(){
             @Override public void onCaptureSuccess(ImageProxy frame){
@@ -135,7 +206,13 @@ public final class CloudLabelActivity extends ComponentActivity {
                     Bitmap photo=CameraImages.crop(frame,captureWidth,captureHeight);int edge=Math.max(photo.getWidth(),photo.getHeight());
                     if(edge>2000){Bitmap smaller=Bitmap.createScaledBitmap(photo,photo.getWidth()*2000/edge,photo.getHeight()*2000/edge,true);if(smaller!=photo)photo.recycle();photo=smaller;}
                     if(!CameraImages.hasContrast(photo)){photo.recycle();status.setText("This photo is dark or blank. Improve lighting and try again.");}
-                    else{photos.add(photo);consent.setChecked(false);status.setText("Photo "+photos.size()+" selected. Tap its thumbnail to inspect. Capture the remaining label sections.");}
+                    else{
+                        // Remove displayed bitmap references before recycling a replaced source.
+                        thumbnails.removeAllViews();if(enlarged!=null){enlarged.dismiss();enlarged=null;}
+                        capturing=false;CloudLabelActivity.this.session.message="Photo captured. Check that the printed text is sharp and complete.";
+                        CloudLabelActivity.this.session.acceptPhoto(photo);
+                        if(!photoReview)status.setText("Name & strength captured. Now turn to the taking instructions.");
+                    }
                 }catch(RuntimeException unavailable){status.setText("Capture failed. Try again.");}
                 finally{frame.close();if(session==generation){capturing=false;updateCapture();}}
             }
@@ -144,54 +221,33 @@ public final class CloudLabelActivity extends ComponentActivity {
     }
     private boolean current(int session){return resumed&&!isDestroyed()&&session==generation;}
     private void checkConnection(){
-        if(!resumed||busy)return; ready=false;consent.setChecked(false);updateCapture();final int session=generation;
-        worker.execute(() -> {
-            String message;String policy="Cloud connection is not ready. No photos have been uploaded.";boolean connected=false;
-            try(CloudReader connection=new CloudReader(this)){
-                reader=connection;var config=connection.settings();
-                policy=config.get("retention_notice").getAsString();
-                if(policy.length()>2000)throw new IOException("Invalid connection metadata.");
-                connected=config.get("ready").isJsonPrimitive()&&config.get("ready").getAsJsonPrimitive().isBoolean()&&config.get("ready").getAsBoolean()
-                    &&"standard".equals(config.get("retention_policy").getAsString());
-                message=connected?"Cloud reader configured. Capture photos, review the retention notice, then explicitly send.":"API setup is needed on the server. Photos can be captured, but uploading is disabled.";
-            }catch(Exception unavailable){message="Cloud connection needs setup. Keep the USB bridge running on your Mac, or open Cloud connection settings.";}
-            finally{reader=null;}
-            final String outcome=message, description=policy;final boolean active=connected;
-            runOnUiThread(() -> {if(current(session)&&!reviewing){ready=active;retention=description;status.setText(outcome);updateCapture();}});
-        });
+        if(!resumed||busy)return; if(consent!=null)consent.setChecked(false); session.checkConnection();
     }
     private void upload(){
-        if(!resumed||busy||capturing||!ready||!consent.isChecked()||photos.size()<2)return;
-        ArrayList<Bitmap> chosen=new ArrayList<>(photos);
-        busy=true;final int session=++generation;stopCamera();updateCapture();status.setText("Sending "+chosen.size()+" selected photos together for one cloud reading…");
-        worker.execute(() -> {
-            ArrayList<byte[]> selected=new ArrayList<>();
-            LabelDraft result=null;String error=null;long started=SystemClock.elapsedRealtime();
-            try(CloudReader connection=new CloudReader(this)){
-                reader=connection;
-                for(Bitmap photo:chosen) synchronized(photosLock){
-                    if(!current(session)){connection.cancel();return;}
-                    byte[] jpeg=CloudReader.photo(photo);
-                    if(jpeg.length>3*1024*1024){Arrays.fill(jpeg,(byte)0);throw new IOException("A photo is too large. Move closer to the relevant label section and retake.");}
-                    selected.add(jpeg);
-                }
-                if(!current(session)){connection.cancel();return;}
-                result=connection.read(selected);
-            }
-            catch(IOException failure){error=failure.getMessage();}
-            catch(RuntimeException failure){error="The cloud reader returned an invalid response. No fields were accepted.";}
-            finally{reader=null;for(byte[] image:selected)Arrays.fill(image,(byte)0);}
-            final LabelDraft draft=result;final String message=error;final long elapsed=SystemClock.elapsedRealtime()-started;
-            runOnUiThread(() -> {if(!current(session))return;busy=false;if(draft==null){consent.setChecked(false);status.setText(message==null?"Reading failed. Try again.":message);startCamera();updateCapture();}else showReview(draft,elapsed);});
-        });
+        if(!resumed||!photoReview||busy||capturing||!ready||consent==null||!consent.isChecked()||photos.size()<2)return;
+        consent.setChecked(false); stopCamera(); session.upload();
+    }
+    private void renderSession(){
+        busy = session.busy; ready = session.ready && !session.checking; retention = session.retention;
+        if(session.draft != null && !busy){
+            if(!reviewing)showReview(session.draft,session.elapsed);
+        }else{
+            if(session.page==CloudScanSession.Page.PHOTOS){if(!photoReview||reviewing)showPhotoReview();updatePhotoReview();}
+            else{if(photoReview||reviewing||shownCaptureIndex!=captureIndex()){stopCamera();showCapture();}updateCapture();if(!busy)startCamera();}
+            if(photoReview)status.setText(session.message);
+        }
     }
     private void showReview(LabelDraft draft,long elapsed){
-        reviewing=true;screen("Review the cloud reading");text(root,"One reading of all selected photos ("+elapsed/1000+" seconds). Check every field against the original label. Missing or conflicting text must be corrected manually.",15);
+        session.draft = draft; session.elapsed = elapsed;
+        stopCamera();reviewing=true;photoReview=false;screen("Review the details");steps(3);text(root,"Read in "+elapsed/1000+" seconds. Check each field against your photos and the original label. Correct anything missing or wrong before continuing.",15);
         for(int i=0;i<photos.size();i++){final int index=i;button(root,"Inspect source photo "+(i+1),() -> inspect(index));}
         EditText name=field("Medication name",draft.name,120),strength=field("Printed strength with units",draft.strength,80),directions=field("Full printed taking instructions",draft.directions,2000);
+        reviewName=name;reviewStrength=strength;reviewDirections=directions;
+        String missing = (draft.name.isEmpty()?" name":"") + (draft.strength.isEmpty()?" strength":"") + (draft.directions.isEmpty()?" instructions":"");
+        if(!missing.isEmpty())text(root,"Not read reliably:"+missing+". Inspect the source photos and fill these fields manually, or retake the missing section.",15);
         directions.setSingleLine(false);directions.setMinLines(3);TextView error=text(root,"",14);
         CheckBox confirm=new CheckBox(this);confirm.setText("I checked the medication name, strength and complete instructions against the label.");confirm.setSaveEnabled(false);root.addView(confirm);
-        Button use=button(root,"Use reviewed details",() -> {
+        Button use=primary(root,"Use reviewed details",() -> {
             if(!confirm.isChecked())return;
             if(name.getText().toString().trim().isEmpty()||strength.getText().toString().trim().isEmpty()||directions.getText().toString().trim().isEmpty()){error.setText("Complete the missing printed fields before confirming, or return and enter details manually.");return;}
             setResult(RESULT_OK,new Intent().putExtra("product_name",name.getText().toString().trim()).putExtra("strength",strength.getText().toString().trim())
@@ -199,16 +255,31 @@ public final class CloudLabelActivity extends ComponentActivity {
         });use.setEnabled(false);confirm.setOnCheckedChangeListener((v,checked) -> use.setEnabled(checked));
         TextWatcher edits=new TextWatcher(){public void beforeTextChanged(CharSequence s,int start,int count,int after){}public void onTextChanged(CharSequence s,int start,int before,int count){confirm.setChecked(false);}public void afterTextChanged(Editable value){}};
         name.addTextChangedListener(edits);strength.addTextChangedListener(edits);directions.addTextChangedListener(edits);
-        button(root,"Discard reading and take new photos",() -> {generation++;clearPhotos();ready=false;showCapture("Capture new sections of the same bottle.");checkConnection();startCamera();});
+        button(root,"Discard reading and take new photos",() -> {generation++;clearPhotos();ready=false;showCapture();checkConnection();startCamera();});
         button(root,"Return without saving",this::finish);text(root,"Only reviewed text returns to the medication form. Set quantity and times yourself, then save explicitly. No dose has been logged.",12);
     }
     private EditText field(String title,String value,int max){text(root,title,15);EditText edit=new EditText(this);edit.setContentDescription(title);edit.setSingleLine(true);edit.setSaveEnabled(false);edit.setFilters(new InputFilter[]{new InputFilter.LengthFilter(max)});edit.setText(value);root.addView(edit);return edit;}
-    private TextView text(LinearLayout parent,String value,int size){TextView text=new TextView(this);text.setText(value);text.setTextSize(size);text.setSaveEnabled(false);text.setPadding(0,dp(5),0,dp(5));parent.addView(text);return text;}
-    private Button button(LinearLayout parent,String value,Runnable action){Button button=new Button(this);button.setText(value);button.setOnClickListener(v -> action.run());parent.addView(button);return button;}
+    private GradientDrawable rounded(int color,int radius){GradientDrawable background=new GradientDrawable();background.setColor(color);background.setCornerRadius(dp(radius));return background;}
+    private TextView text(LinearLayout parent,String value,int size){TextView text=new TextView(this);text.setText(value);text.setTextColor(size<=13?MUTED:INK);text.setTextSize(size);text.setSaveEnabled(false);text.setPadding(0,dp(5),0,dp(5));parent.addView(text);return text;}
+    private Button button(LinearLayout parent,String value,Runnable action){Button button=new Button(this);button.setText(value);button.setTextColor(ACCENT);button.setAllCaps(false);button.setMinHeight(dp(48));button.setOnClickListener(v -> action.run());parent.addView(button,new LinearLayout.LayoutParams(-1,-2));return button;}
+    private Button primary(LinearLayout parent,String value,Runnable action){Button button=button(parent,value,action);button.setBackgroundTintList(new android.content.res.ColorStateList(new int[][]{new int[]{android.R.attr.state_enabled},new int[]{}},new int[]{ACCENT,0xFFDAE2DD}));button.setTextColor(new android.content.res.ColorStateList(new int[][]{new int[]{android.R.attr.state_enabled},new int[]{}},new int[]{Color.WHITE,MUTED}));return button;}
+    private Button rowButton(LinearLayout parent,String value,Runnable action){Button button=button(parent,value,action);button.setLayoutParams(new LinearLayout.LayoutParams(0,-2,1));return button;}
     private int dp(int value){return Math.round(value*getResources().getDisplayMetrics().density);}
-    private void clearPhotos(){if(enlarged!=null){enlarged.dismiss();enlarged=null;}if(root!=null)root.removeAllViews();synchronized(photosLock){for(Bitmap photo:photos)photo.recycle();photos.clear();}}
-    @Override public void onResume(){super.onResume();resumed=true;startCamera();checkConnection();}
-    @Override public void onPause(){resumed=false;generation++;CloudReader active=reader;if(active!=null)active.cancel();busy=false;capturing=false;ready=false;stopCamera();clearPhotos();showCapture("Photos and unconfirmed readings were cleared when this screen lost focus.");super.onPause();}
-    @Override public void onDestroy(){worker.shutdown();super.onDestroy();}
+    private void detachImages(){if(enlarged!=null){enlarged.dismiss();enlarged=null;}if(root!=null)root.removeAllViews();}
+    private void clearPhotos(){detachImages();session.clear();reviewName=null;reviewStrength=null;reviewDirections=null;}
+    @Override public void onResume(){super.onResume();resumed=true;renderSession();if(!busy&&session.draft==null)checkConnection();}
+    @Override public void onPause(){
+        resumed=false;generation++;capturing=false;stopCamera();
+        if(enlarged!=null){enlarged.dismiss();enlarged=null;}
+        if(reviewing&&reviewName!=null)session.draft=new LabelDraft(reviewName.getText().toString(),reviewStrength.getText().toString(),reviewDirections.getText().toString());
+        super.onPause();
+    }
+    @Override public void onStop(){
+        if(!isChangingConfigurations()){
+            detachImages();session.clear();reviewing=false;busy=false;ready=false;
+            showCapture();
+        }
+        super.onStop();
+    }
     @Override public void onRequestPermissionsResult(int code,String[] permissions,int[] results){super.onRequestPermissionsResult(code,permissions,results);if(code==94){if(results.length>0&&results[0]==PackageManager.PERMISSION_GRANTED)startCamera();else status.setText("Camera permission is needed for label photos. Manual entry remains available.");}}
 }

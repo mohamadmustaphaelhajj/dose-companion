@@ -1,4 +1,6 @@
 """Single-user development bridge. Inputs and model outputs are handled in memory only."""
+from collections import OrderedDict
+import re
 import base64
 import binascii
 import hmac
@@ -101,6 +103,8 @@ def validated_draft(value):
         field = value[key]
         if field is not None and (not isinstance(field, str) or len(field) > limit or '\x00' in field):
             raise BridgeError(502, 'invalid_model_result')
+    if not any(field and field.strip() for field in value.values()):
+        raise BridgeError(422, 'model_could_not_read_label')
     return value
 
 
@@ -112,6 +116,8 @@ def read_openai_result(response):
         if not isinstance(item, dict) or item.get('type') != 'message':
             continue
         for part in item.get('content', []):
+            if not isinstance(part, dict):
+                raise BridgeError(502, 'invalid_model_result')
             if part.get('type') == 'refusal':
                 raise BridgeError(422, 'model_could_not_read_label')
             if part.get('type') == 'output_text':
@@ -142,9 +148,24 @@ def call_openai(images, settings):
             raise BridgeError(502, 'invalid_model_result')
         return read_openai_result(parse_json(data))
     except HTTPError as failure:
-        code = 'provider_account_setup_required' if failure.code in (401, 403, 429) else 'provider_request_failed'
+        try:
+            error = parse_json(failure.read(16384)).get('error', {})
+            provider_code = error.get('code') if isinstance(error, dict) else None
+        except (ValueError, TypeError, AttributeError):
+            provider_code = None
+        status = failure.code
         failure.close()
-        raise BridgeError(502, code)
+        if provider_code in ('credit_balance_exhausted', 'insufficient_quota'):
+            raise BridgeError(402, 'provider_quota_exhausted')
+        if status == 401:
+            raise BridgeError(502, 'provider_auth_failed')
+        if status == 403:
+            raise BridgeError(502, 'provider_access_denied')
+        if status == 404:
+            raise BridgeError(502, 'provider_model_unavailable')
+        if status == 429:
+            raise BridgeError(429, 'provider_rate_limited')
+        raise BridgeError(502, 'provider_unavailable' if status >= 500 else 'provider_request_rejected')
     except (URLError, socket.timeout, TimeoutError):
         raise BridgeError(504, 'provider_timeout_or_connection_failed')
     except (ValueError, TypeError, KeyError):
@@ -211,6 +232,17 @@ class Handler(BaseHTTPRequestHandler):
                 raise BridgeError(400, 'invalid_request')
             images = validate_upload(parse_json(raw))
             self.server.last_request = time.monotonic()
+            request_id = self.headers.get('X-Scan-Request-Id')
+            if request_id is not None:
+                if not re.fullmatch(r'[a-f0-9]{32}', request_id):
+                    raise BridgeError(400, 'invalid_request_id')
+                now = time.monotonic()
+                self.server.receipts = OrderedDict((key, when) for key, when in self.server.receipts.items() if now - when < 600)
+                if request_id in self.server.receipts:
+                    raise BridgeError(409, 'duplicate_submission')
+                self.server.receipts[request_id] = now
+                while len(self.server.receipts) > 512:
+                    self.server.receipts.popitem(last=False)
             result = call_openai(images, settings)
             self.respond(200, result)
         except BridgeError as failure:
@@ -226,8 +258,11 @@ class Handler(BaseHTTPRequestHandler):
 
 class Server(ThreadingHTTPServer):
     daemon_threads = True
-    active = threading.BoundedSemaphore(1)
-    last_request = 0.0
+    def __init__(self, *args, **kwargs):
+        self.active = threading.BoundedSemaphore(1)
+        self.last_request = 0.0
+        self.receipts = OrderedDict()
+        super().__init__(*args, **kwargs)
     def handle_error(self, *_):
         pass
 
